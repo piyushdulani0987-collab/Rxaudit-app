@@ -3,6 +3,6 @@
     <item
         android:width="66dp"
         android:height="66dp"
-        android:drawable="@drawable/rx_audit_icon"
+        android:drawable="@drawable/a1ona_logo_1788950911375"
         android:gravity="center" />
 </layer-list>

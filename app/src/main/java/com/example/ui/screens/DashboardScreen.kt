@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Assessment
+import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.automirrored.filled.FactCheck
@@ -30,6 +31,13 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -69,13 +77,18 @@ import com.example.ui.theme.WarningAmber
 import com.example.ui.viewmodel.AuditViewModel
 import com.example.ui.viewmodel.FilterOption
 
+import com.example.ui.components.CompliancePieChart
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardScreen(
     viewModel: AuditViewModel,
+    isDarkTheme: Boolean,
+    onToggleTheme: () -> Unit,
     onOpenScan: () -> Unit,
     onOpenReport: () -> Unit,
     onOpenTrail: () -> Unit,
+    onOpenEhrSync: () -> Unit,
     onSelectPrescription: (PrescriptionEntity) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -95,7 +108,7 @@ fun DashboardScreen(
                 title = {
                     Column {
                         Text(
-                            text = "Prescription Audit",
+                            text = "A1ONA • Prescription Audit",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -108,6 +121,17 @@ fun DashboardScreen(
                     }
                 },
                 actions = {
+                    // Light/Dark Theme Toggle Button
+                    IconButton(
+                        onClick = onToggleTheme,
+                        modifier = Modifier.testTag("theme_toggle_button")
+                    ) {
+                        Icon(
+                            androidx.compose.material.icons.Icons.Default.Brightness6,
+                            contentDescription = "Toggle Light/Dark Theme",
+                            tint = MaterialTheme.colorScheme.secondary
+                        )
+                    }
                     IconButton(
                         onClick = onOpenTrail,
                         modifier = Modifier.testTag("audit_trail_button")
@@ -145,14 +169,24 @@ fun DashboardScreen(
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = onOpenScan,
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = Color.White,
-                icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                text = { Text("1-Tap Audit Rx", fontWeight = FontWeight.Bold) },
-                modifier = Modifier.testTag("scan_prescription_fab")
-            )
+            Column(horizontalAlignment = Alignment.End) {
+                androidx.compose.material3.SmallFloatingActionButton(
+                    onClick = onOpenEhrSync,
+                    containerColor = com.example.ui.theme.MedicalTealDark,
+                    contentColor = androidx.compose.ui.graphics.Color.White,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                ) {
+                    Icon(androidx.compose.material.icons.Icons.Default.Refresh, contentDescription = "Sync EHR")
+                }
+                ExtendedFloatingActionButton(
+                    onClick = onOpenScan,
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = androidx.compose.ui.graphics.Color.White,
+                    icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                    text = { Text("1-Tap Audit Rx", fontWeight = FontWeight.Bold) },
+                    modifier = Modifier.testTag("scan_prescription_fab")
+                )
+            }
         }
     ) { innerPadding ->
         LazyColumn(
@@ -169,6 +203,45 @@ fun DashboardScreen(
                     onOpenReport = onOpenReport,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                 )
+            }
+
+            // 1.5 Compliance Analytics Visualization
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Overall Compliance Analytics",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                            CompliancePieChart(
+                                compliantCount = indicators.compliantCount,
+                                nonCompliantCount = indicators.nonCompliantCount
+                            )
+                            Spacer(modifier = Modifier.width(32.dp))
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(modifier = Modifier.size(12.dp).clip(CircleShape).background(CompliantGreen))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Compliant Rx (${indicators.compliantCount})", fontSize = 12.sp)
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(modifier = Modifier.size(12.dp).clip(CircleShape).background(NonCompliantRed))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Flagged Rx (${indicators.nonCompliantCount})", fontSize = 12.sp)
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // 2. WHO Core Prescribing Indicators Section

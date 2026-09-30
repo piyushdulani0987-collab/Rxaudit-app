@@ -5,13 +5,19 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import com.example.data.model.AuditHistoryEntity
 import com.example.data.model.PrescriptionEntity
 
-@Database(entities = [PrescriptionEntity::class], version = 1, exportSchema = false)
+@Database(
+    entities = [PrescriptionEntity::class, AuditHistoryEntity::class],
+    version = 3,
+    exportSchema = false
+)
 @TypeConverters(Converters::class)
 abstract class AuditDatabase : RoomDatabase() {
 
     abstract fun prescriptionDao(): PrescriptionDao
+    abstract fun auditHistoryDao(): AuditHistoryDao
 
     companion object {
         @Volatile

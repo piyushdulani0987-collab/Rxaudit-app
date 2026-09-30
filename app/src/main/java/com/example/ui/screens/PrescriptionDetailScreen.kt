@@ -200,6 +200,92 @@ fun PrescriptionDetailScreen(
                 }
             }
 
+            val interactionAlerts = remember(drugList) {
+                com.example.data.model.DrugInteractionEngine.checkInteractions(drugList)
+            }
+
+            // Patient-Level Severe ADR & DDI Alerts
+            if (interactionAlerts.isNotEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = NonCompliantRedBg),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, NonCompliantRed.copy(alpha = 0.5f))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Warning, contentDescription = null, tint = NonCompliantRed, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "PATIENT-LEVEL SEVERE ADR & DDI ALERTS (${interactionAlerts.size})",
+                                fontWeight = FontWeight.Bold,
+                                color = NonCompliantRed,
+                                fontSize = 13.sp
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(10.dp))
+                        interactionAlerts.forEach { alert ->
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "${alert.drugA.uppercase()} + ${alert.drugB.uppercase()}",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        val badgeColor = when (alert.severity) {
+                                            com.example.data.model.InteractionSeverity.CONTRAINDICATED -> NonCompliantRed
+                                            com.example.data.model.InteractionSeverity.SEVERE -> WarningAmber
+                                            else -> MaterialTheme.colorScheme.primary
+                                        }
+                                        Text(
+                                            text = alert.severity.name,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = badgeColor,
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(badgeColor.copy(alpha = 0.15f))
+                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "Mechanism: ${alert.mechanism}",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "Severe ADR: ${alert.clinicalConsequence}",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = NonCompliantRed
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "Action: ${alert.recommendation}",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Deficiencies Callout
             if (prescription.deficienciesList.isNotBlank()) {
                 Card(
@@ -256,7 +342,19 @@ fun PrescriptionDetailScreen(
                     DetailRow("MCI / NMC Reg. No.", if (prescription.doctorRegNumber.isNotBlank()) prescription.doctorRegNumber else "NOT DOCUMENTED (NON-COMPLIANT)")
                     DetailRow("Doctor Signature", if (prescription.hasDoctorSignature) "Verified Present" else "MISSING (NON-COMPLIANT)")
                     DetailRow("Diagnosis Documented", if (prescription.diagnosis.isNotBlank()) prescription.diagnosis else "NOT DOCUMENTED (MANDATORY)")
+                    if (prescription.icd10Code.isNotBlank()) {
+                        DetailRow("ICD-10 Code", prescription.icd10Code)
+                    }
                     DetailRow("Allergy Status", prescription.allergyDetails)
+                    
+                    if (prescription.drugInteractionsFound.isNotBlank() && prescription.drugInteractionsFound != "None") {
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 6.dp))
+                        Text("Clinical Insights", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                        DetailRow("DDI Checker", prescription.drugInteractionsFound)
+                    }
+                    if (prescription.genericRecommendations.isNotBlank() && prescription.genericRecommendations != "None") {
+                        DetailRow("Generic Alts.", prescription.genericRecommendations)
+                    }
                 }
             }
 

@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.AuditDatabase
+import com.example.data.model.AuditHistoryEntity
 import com.example.data.model.AuditIndicators
 import com.example.data.model.PrescriptionEntity
 import com.example.data.model.SampleSizeEstimate
@@ -19,6 +20,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+import com.example.data.remote.FhirClient
+
 enum class FilterOption(val label: String) {
     ALL("All Prescriptions"),
     NON_COMPLIANT("Non-Compliant Flagged"),
@@ -32,9 +35,17 @@ enum class FilterOption(val label: String) {
 class AuditViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: PrescriptionRepository
+    val auditHistory: StateFlow<List<AuditHistoryEntity>>
+
     init {
         val database = AuditDatabase.getDatabase(application)
-        repository = PrescriptionRepository(database.prescriptionDao())
+        repository = PrescriptionRepository(database.prescriptionDao(), database.auditHistoryDao())
+        auditHistory = repository.allAuditHistory
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5000),
+                initialValue = emptyList()
+            )
         viewModelScope.launch {
             repository.loadSampleBatchIfEmpty()
         }
@@ -64,6 +75,37 @@ class AuditViewModel(application: Application) : AndroidViewModel(application) {
     // Parsing / Scan state
     private val _isProcessing = MutableStateFlow(false)
     val isProcessing: StateFlow<Boolean> = _isProcessing.asStateFlow()
+
+    private val _selectedImageUri = MutableStateFlow<android.net.Uri?>(null)
+    val selectedImageUri: StateFlow<android.net.Uri?> = _selectedImageUri.asStateFlow()
+
+    private val _rxTextInput = MutableStateFlow(
+        """
+        Dr. P. K. Verma, MD (Med)
+        Reg No: MCI-48201
+        Date: 06/09/2026
+        Pt: Mohan Lal, 54 Yrs, Male, UHID-93821
+        Dx: Essential Hypertension with Grade 1 Angina
+        Allergies: NKA (No Known Drug Allergies)
+        
+        Rx:
+        1. Tab Telmisartan 40mg - 1 Tab OD (Morning) x 30 days
+        2. Tab Amlodipine 5mg - 1 Tab OD (Night) x 30 days
+        3. Tab Atorvastatin 20mg - 1 Tab HS (Bedtime) x 30 days
+        4. Tab Sorbitrate 5mg - 1 Tab Sublingual SOS for chest pain
+        
+        Dr. Signature: [Signed]
+        """.trimIndent()
+    )
+    val rxTextInput: StateFlow<String> = _rxTextInput.asStateFlow()
+
+    fun setSelectedImageUri(uri: android.net.Uri?) {
+        _selectedImageUri.value = uri
+    }
+
+    fun setRxTextInput(text: String) {
+        _rxTextInput.value = text
+    }
 
     private val _pendingParsedPrescription = MutableStateFlow<ParsedPrescription?>(null)
     val pendingParsedPrescription: StateFlow<ParsedPrescription?> = _pendingParsedPrescription.asStateFlow()
@@ -145,6 +187,8 @@ class AuditViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearPendingParsed() {
         _pendingParsedPrescription.value = null
+        _selectedImageUri.value = null
+        _rxTextInput.value = ""
     }
 
     fun clearUserMessage() {
@@ -159,13 +203,45 @@ class AuditViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _isProcessing.value = true
             try {
-                // Try Gemini first if online & configured, otherwise fallback to high-precision local medical parser
-                val geminiResult = PrescriptionOcrParser.analyzeWithGeminiIfAvailable(rawInput)
-                val parsed = geminiResult ?: PrescriptionOcrParser.parsePrescriptionText(rawInput)
-                _pendingParsedPrescription.value = parsed
+                val hasCustomText = rawInput.isNotBlank() && !rawInput.startsWith("Prescription image attached")
+
+                val geminiResult = if (imageUri != null) {
+                    if (PrescriptionOcrParser.isGeminiConfigured()) {
+                        PrescriptionOcrParser.analyzeImageWithGemini(getApplication(), imageUri)
+                    } else {
+                        null
+                    }
+                } else if (PrescriptionOcrParser.isGeminiConfigured() && hasCustomText) {
+                    PrescriptionOcrParser.analyzeWithGeminiIfAvailable(rawInput)
+                } else {
+                    null
+                }
+
+                if (geminiResult != null) {
+                    _pendingParsedPrescription.value = geminiResult
+                } else {
+                    if (hasCustomText) {
+                        _pendingParsedPrescription.value = PrescriptionOcrParser.parsePrescriptionText(rawInput)
+                        if (imageUri != null && !PrescriptionOcrParser.isGeminiConfigured()) {
+                            _userMessage.value = "Audited prescription using offline clinical rules (Add GEMINI_API_KEY in AI Studio Secrets for photo OCR)."
+                        }
+                    } else if (imageUri != null) {
+                        _userMessage.value = "Gemini API key is not configured. Please add GEMINI_API_KEY in the AI Studio Secrets panel (Settings ⚙️ → Secrets) to enable camera/photo OCR, or choose a preset/enter text below."
+                    } else {
+                        _pendingParsedPrescription.value = PrescriptionOcrParser.parsePrescriptionText(rawInput)
+                    }
+                }
             } catch (e: Exception) {
-                _userMessage.value = "OCR Parsing note: Using standard clinical rules engine (${e.localizedMessage})"
-                _pendingParsedPrescription.value = PrescriptionOcrParser.parsePrescriptionText(rawInput)
+                val hasCustomText = rawInput.isNotBlank() && !rawInput.startsWith("Prescription image attached")
+                if (hasCustomText) {
+                    _userMessage.value = "OCR note: ${e.localizedMessage}. Audited with offline clinical engine."
+                    _pendingParsedPrescription.value = PrescriptionOcrParser.parsePrescriptionText(rawInput)
+                } else if (imageUri != null) {
+                    _userMessage.value = "${e.localizedMessage ?: "Image OCR failed."}. You can also configure GEMINI_API_KEY in the AI Studio Secrets panel or type the text below."
+                } else {
+                    _userMessage.value = "Using offline clinical rules: ${e.localizedMessage}"
+                    _pendingParsedPrescription.value = PrescriptionOcrParser.parsePrescriptionText(rawInput)
+                }
             } finally {
                 _isProcessing.value = false
             }
@@ -211,5 +287,30 @@ class AuditViewModel(application: Application) : AndroidViewModel(application) {
 
     fun getExecutiveSummary(): String {
         return AuditReportExporter.generateExecutiveSummary(indicators.value, _facilityName.value)
+    }
+
+    suspend fun syncFhirRecords(serverUrl: String): String {
+        return try {
+            val records = FhirClient.fetchMedicationRequests(serverUrl)
+            if (records.isEmpty()) {
+                return "Successfully connected, but no MedicationRequest records found."
+            }
+            
+            var addedCount = 0
+            for (record in records) {
+                // Generate a dummy SHA-256 for imported records to satisfy the DB schema constraints
+                repository.auditAndInsert(
+                    parsed = record,
+                    auditorName = "System (EHR Auto-Sync)",
+                    auditorRole = "Integration Services",
+                    imageUri = "fhir_import"
+                )
+                addedCount++
+            }
+            _userMessage.value = "Successfully imported $addedCount records from EHR."
+            "Success! Imported $addedCount prescription records from FHIR server."
+        } catch (e: Exception) {
+            "Error syncing records: ${e.localizedMessage}"
+        }
     }
 }

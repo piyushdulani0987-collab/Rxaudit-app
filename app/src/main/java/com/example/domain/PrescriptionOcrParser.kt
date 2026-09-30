@@ -1,5 +1,8 @@
 package com.example.domain
 
+import android.content.Context
+import android.net.Uri
+import android.util.Base64
 import com.example.BuildConfig
 import com.example.data.model.DrugItem
 import kotlinx.coroutines.Dispatchers
@@ -24,6 +27,7 @@ data class ParsedPrescription(
     val department: String,
     val dateString: String,
     val diagnosis: String,
+    val icd10Code: String = "",
     val allergyStatusDocumented: Boolean,
     val allergyDetails: String,
     val historyDocumented: Boolean,
@@ -32,15 +36,23 @@ data class ParsedPrescription(
     val doctorRegNumber: String,
     val hasDoctorSignature: Boolean,
     val drugs: List<DrugItem>,
-    val rawText: String
+    val rawText: String,
+    val drugInteractionsFound: String = "",
+    val genericRecommendations: String = ""
 )
 
 object PrescriptionOcrParser {
 
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
         .build()
+
+    fun isGeminiConfigured(): Boolean {
+        val key = BuildConfig.GEMINI_API_KEY
+        return key.isNotBlank() && key != "MY_GEMINI_API_KEY"
+    }
 
     /**
      * Offline intelligent medical regex and keyword parser for Indian Prescriptions.
@@ -78,9 +90,14 @@ object PrescriptionOcrParser {
 
         // 3. UHID / OPD Number
         var uhid = ""
-        val uhidRegex = Regex("""(?:UHID|OPD|IPD|CR|Reg|MRN|Ref)[:\s#]*([A-Za-z0-9\-/]{4,16})""", RegexOption.IGNORE_CASE)
-        uhidRegex.find(raw)?.let {
-            uhid = it.groupValues[1].trim()
+        val explicitUhid = Regex("""(UHID[\s:\-#]*[A-Za-z0-9\-/]{4,16})""", RegexOption.IGNORE_CASE).find(raw)?.groupValues?.get(1)
+        if (!explicitUhid.isNullOrBlank()) {
+            uhid = explicitUhid.trim()
+        } else {
+            val generalRegex = Regex("""(?:OPD|IPD|CR|Reg|MRN|Ref)[:\s#]*([A-Za-z0-9\-/]{4,16})""", RegexOption.IGNORE_CASE)
+            generalRegex.find(raw)?.let {
+                uhid = it.groupValues[1].trim()
+            }
         }
         if (uhid.isBlank()) uhid = "UHID-${System.currentTimeMillis() % 100000}"
 
@@ -137,17 +154,18 @@ object PrescriptionOcrParser {
 
         // 9. Extract Medicines
         val extractedDrugs = mutableListOf<DrugItem>()
-        val drugPrefixes = listOf("tab", "cap", "inj", "syp", "syrup", "susp", "oint", "drop", "iv", "im", "1.", "2.", "3.", "4.", "5.", "6.", "7.", "8.")
+        val drugPrefixes = listOf("tab", "cap", "inj", "syp", "syrup", "susp", "oint", "drop", "iv", "ivf", "im", "1.", "2.", "3.", "4.", "5.", "6.", "7.", "8.")
 
         for (line in lines) {
             val lineLower = line.lowercase()
             val startsWithPrefix = drugPrefixes.any { lineLower.startsWith(it) }
-            val containsRxDosage = lineLower.contains("mg") || lineLower.contains("ml") || lineLower.contains("od") || lineLower.contains("bd") || lineLower.contains("tds") || lineLower.contains("qid") || lineLower.contains("sos")
+            val containsRxDosage = lineLower.contains("mg") || lineLower.contains("ml") || lineLower.contains("od") || lineLower.contains("bd") || lineLower.contains("tds") || lineLower.contains("qid") || lineLower.contains("sos") || lineLower.contains("stat")
 
             if (startsWithPrefix || (containsRxDosage && !lineLower.startsWith("dr") && !lineLower.startsWith("date") && !lineLower.startsWith("age"))) {
                 // Parse dose, route, freq, days
-                val dose = Regex("""(\d+\s*(?:mg|ml|g|mcg|iu|unit))""", RegexOption.IGNORE_CASE).find(line)?.groupValues?.get(1) ?: "Standard"
+                val dose = Regex("""(\d+\s*(?:mg|ml|g|mcg|iu|unit|vial|amp|ampoule|bottle|pint|tab|tablet))""", RegexOption.IGNORE_CASE).find(line)?.groupValues?.get(1) ?: "Standard"
                 val freq = when {
+                    lineLower.contains("stat") -> "STAT"
                     lineLower.contains("qid") -> "QID"
                     lineLower.contains("tds") || lineLower.contains("tid") -> "TDS"
                     lineLower.contains("bd") || lineLower.contains("bid") -> "BD"
@@ -157,16 +175,18 @@ object PrescriptionOcrParser {
                     else -> "BD"
                 }
                 val route = when {
+                    lineLower.contains("ivf") -> "IV"
                     lineLower.contains("inj") || lineLower.contains("iv") -> "IV"
                     lineLower.contains("im") -> "IM"
                     lineLower.contains("oint") || lineLower.contains("cream") -> "Topical"
                     lineLower.contains("inh") || lineLower.contains("rotacap") -> "Inhalation"
                     else -> "Oral"
                 }
-                val durationDays = Regex("""(\d+)\s*(?:days|d\b|wks|weeks)""", RegexOption.IGNORE_CASE).find(line)?.groupValues?.get(1)?.toIntOrNull() ?: 5
+                val durationDays = Regex("""(\d+)\s*(?:days|d\b|wks|weeks)""", RegexOption.IGNORE_CASE).find(line)?.groupValues?.get(1)?.toIntOrNull() ?: if (freq == "STAT") 1 else 5
                 val instructions = when {
                     lineLower.contains("after food") || lineLower.contains("pc") -> "After food"
                     lineLower.contains("before food") || lineLower.contains("ac") -> "Before food"
+                    lineLower.contains("stat") -> "Immediate (STAT)"
                     else -> ""
                 }
 
@@ -212,7 +232,7 @@ object PrescriptionOcrParser {
      */
     suspend fun analyzeWithGeminiIfAvailable(prescriptionText: String): ParsedPrescription? = withContext(Dispatchers.IO) {
         val apiKey = BuildConfig.GEMINI_API_KEY
-        if (apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") {
+        if (!isGeminiConfigured()) {
             return@withContext null
         }
 
@@ -243,7 +263,8 @@ object PrescriptionOcrParser {
                       "dose": "string",
                       "frequency": "OD/BD/TDS/QID/SOS",
                       "route": "Oral/IV/IM",
-                      "durationDays": 5
+                      "durationDays": 5,
+                      "instructions": "string (e.g. After food, Before food)"
                     }
                   ]
                 }
@@ -268,6 +289,10 @@ object PrescriptionOcrParser {
             val response = httpClient.newCall(request).execute()
             val bodyString = response.body?.string() ?: return@withContext null
             val responseObj = JSONObject(bodyString)
+            if (responseObj.has("error")) {
+                val errorMsg = responseObj.getJSONObject("error").optString("message", "Gemini API request failed")
+                throw Exception("Gemini API Error: $errorMsg")
+            }
             val candidates = responseObj.optJSONArray("candidates") ?: return@withContext null
             val content = candidates.optJSONObject(0)?.optJSONObject("content") ?: return@withContext null
             val parts = content.optJSONArray("parts") ?: return@withContext null
@@ -287,8 +312,9 @@ object PrescriptionOcrParser {
                             rawName = rawName,
                             dose = d.optString("dose", "Standard"),
                             route = d.optString("route", "Oral"),
-                            frequency = d.optString("frequency", "BD"),
-                            durationDays = d.optInt("durationDays", 5)
+                                                        frequency = d.optString("frequency", "BD"),
+                            durationDays = d.optInt("durationDays", 5),
+                            instructions = d.optString("instructions", "")
                         )
                     )
                 }
@@ -303,6 +329,7 @@ object PrescriptionOcrParser {
                 department = json.optString("department", "General Medicine"),
                 dateString = json.optString("dateString", SimpleDateFormat("dd/MM/yyyy", Locale.getDefault()).format(Date())),
                 diagnosis = json.optString("diagnosis", "Clinical Evaluation"),
+                icd10Code = json.optString("icd10Code", "Unknown"),
                 allergyStatusDocumented = json.optBoolean("allergyStatusDocumented", false),
                 allergyDetails = json.optString("allergyDetails", "NKA"),
                 historyDocumented = json.optBoolean("historyDocumented", true),
@@ -311,10 +338,152 @@ object PrescriptionOcrParser {
                 doctorRegNumber = json.optString("doctorRegNumber", "MCI-48201"),
                 hasDoctorSignature = json.optBoolean("hasDoctorSignature", true),
                 drugs = drugList.ifEmpty { listOf(AuditRulesEngine.evaluateDrug("Tab Paracetamol", "650mg", "Oral", "TDS", 3)) },
-                rawText = prescriptionText
+                rawText = prescriptionText,
+                drugInteractionsFound = json.optString("drugInteractionsFound", "None"),
+                genericRecommendations = json.optString("genericRecommendations", "None")
             )
-        } catch (_: Exception) {
-            return@withContext null
+        } catch (e: Exception) {
+            throw Exception("Gemini API Error: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Enhanced Gemini-powered multimodal / structured extraction for images (OCR)
+     */
+    suspend fun analyzeImageWithGemini(context: Context, imageUri: String): ParsedPrescription? = withContext(Dispatchers.IO) {
+        val apiKey = BuildConfig.GEMINI_API_KEY
+        if (!isGeminiConfigured()) {
+            throw Exception("Gemini API key is not configured. Please add GEMINI_API_KEY in the AI Studio Secrets panel.")
+        }
+
+        try {
+            val uri = Uri.parse(imageUri)
+            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@withContext null
+            val base64Image = Base64.encodeToString(bytes, Base64.NO_WRAP)
+            val mimeType = context.contentResolver.getType(uri) ?: "image/jpeg"
+
+            val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey"
+            val prompt = """
+                Perform advanced OCR on this medical prescription image (handwritten or typed).
+                If the text is in a regional language (Hindi, Tamil, etc.), translate it to English.
+                Extract structured clinical prescription audit fields for NABH / WHO India audit.
+                Analyze the prescription to identify potential severe Drug-Drug Interactions (DDIs).
+                Suggest generic alternatives for any branded drugs.
+                Map the diagnosis to the most appropriate ICD-10 code.
+                Return ONLY valid JSON matching this schema exactly (no markdown formatting, just raw JSON string):
+                {
+                  "patientName": "string (use [REDACTED] to anonymize)",
+                  "patientAge": 0,
+                  "patientGender": "Male/Female/Other",
+                  "uhid": "string (use [REDACTED] to anonymize)",
+                  "department": "string",
+                  "dateString": "dd/MM/yyyy",
+                  "diagnosis": "string",
+                  "icd10Code": "string",
+                  "allergyStatusDocumented": true/false,
+                  "allergyDetails": "string",
+                  "historyDocumented": true/false,
+                  "legibleHandwritingOrTyped": true/false,
+                  "doctorName": "string",
+                  "doctorRegNumber": "string",
+                  "hasDoctorSignature": true/false,
+                  "drugInteractionsFound": "string (describe any severe DDIs, or 'None')",
+                  "genericRecommendations": "string (suggest generic equivalents for brands)",
+                  "drugs": [
+                    {
+                      "brandName": "string",
+                      "genericName": "string",
+                      "dose": "string",
+                      "frequency": "OD/BD/TDS/QID/SOS",
+                      "route": "Oral/IV/IM",
+                      "durationDays": 5,
+                      "instructions": "string (e.g. After food, Before food)"
+                    }
+                  ]
+                }
+                
+                Note: Pay special attention to extracting drug names reliably. ALWAYS redact patientName and uhid by setting them to "[REDACTED]" for strict patient privacy anonymization.
+            """.trimIndent()
+
+            val requestJson = JSONObject().apply {
+                put("contents", JSONArray().put(JSONObject().apply {
+                    put("parts", JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("text", prompt)
+                        })
+                        put(JSONObject().apply {
+                            put("inlineData", JSONObject().apply {
+                                put("mimeType", mimeType)
+                                put("data", base64Image)
+                            })
+                        })
+                    })
+                }))
+            }
+
+            val request = Request.Builder()
+                .url(url)
+                .post(requestJson.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+
+            val response = httpClient.newCall(request).execute()
+            val bodyString = response.body?.string() ?: return@withContext null
+            val responseObj = JSONObject(bodyString)
+            if (responseObj.has("error")) {
+                val errorMsg = responseObj.getJSONObject("error").optString("message", "Gemini API request failed")
+                throw Exception("Gemini API Error: $errorMsg")
+            }
+            val candidates = responseObj.optJSONArray("candidates") ?: return@withContext null
+            val content = candidates.optJSONObject(0)?.optJSONObject("content") ?: return@withContext null
+            val parts = content.optJSONArray("parts") ?: return@withContext null
+            val rawReply = parts.optJSONObject(0)?.optString("text") ?: return@withContext null
+
+            val cleanedJson = rawReply.replace("```json", "").replace("```", "").trim()
+            val json = JSONObject(cleanedJson)
+
+            val drugList = mutableListOf<DrugItem>()
+            val drugsArray = json.optJSONArray("drugs")
+            if (drugsArray != null) {
+                for (i in 0 until drugsArray.length()) {
+                    val d = drugsArray.getJSONObject(i)
+                    val rawName = d.optString("brandName", d.optString("genericName", "Medicine"))
+                    drugList.add(
+                        AuditRulesEngine.evaluateDrug(
+                            rawName = rawName,
+                            dose = d.optString("dose", "Standard"),
+                            route = d.optString("route", "Oral"),
+                                                        frequency = d.optString("frequency", "BD"),
+                            durationDays = d.optInt("durationDays", 5),
+                            instructions = d.optString("instructions", "")
+                        )
+                    )
+                }
+            }
+
+            return@withContext ParsedPrescription(
+                rxNumber = "RX-${System.currentTimeMillis() % 100000}",
+                patientName = json.optString("patientName", "Patient Unknown"),
+                patientAge = json.optInt("patientAge", 30),
+                patientGender = json.optString("patientGender", "Male"),
+                uhid = json.optString("uhid", "UHID-${System.currentTimeMillis() % 100000}"),
+                department = json.optString("department", "General Medicine"),
+                dateString = json.optString("dateString", SimpleDateFormat("dd/MM/yyyy", Locale.getDefault()).format(Date())),
+                diagnosis = json.optString("diagnosis", "Clinical Evaluation"),
+                icd10Code = json.optString("icd10Code", "Unknown"),
+                allergyStatusDocumented = json.optBoolean("allergyStatusDocumented", false),
+                allergyDetails = json.optString("allergyDetails", "NKA"),
+                historyDocumented = json.optBoolean("historyDocumented", true),
+                legibleHandwritingOrTyped = json.optBoolean("legibleHandwritingOrTyped", true),
+                doctorName = json.optString("doctorName", "Dr. Specialist"),
+                doctorRegNumber = json.optString("doctorRegNumber", ""),
+                hasDoctorSignature = json.optBoolean("hasDoctorSignature", true),
+                drugs = drugList.ifEmpty { listOf(AuditRulesEngine.evaluateDrug("Tab Paracetamol", "650mg", "Oral", "TDS", 3)) },
+                rawText = "Extracted from Image via Gemini OCR",
+                drugInteractionsFound = json.optString("drugInteractionsFound", "None"),
+                genericRecommendations = json.optString("genericRecommendations", "None")
+            )
+        } catch (e: Exception) {
+            throw Exception("Gemini API Error: ${e.message}", e)
         }
     }
 }

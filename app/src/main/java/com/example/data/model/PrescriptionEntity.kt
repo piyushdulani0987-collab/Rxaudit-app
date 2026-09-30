@@ -17,6 +17,7 @@ data class PrescriptionEntity(
     
     // Completeness Checks (NABH MOM.5 & COP.3 standards)
     val diagnosis: String,
+    val icd10Code: String = "",
     val hasDiagnosis: Boolean,
     val allergyStatusDocumented: Boolean,
     val allergyDetails: String,
@@ -25,6 +26,10 @@ data class PrescriptionEntity(
     val doctorName: String,
     val doctorRegNumber: String,
     val hasDoctorSignature: Boolean,
+    
+    // Insights & Redaction
+    val drugInteractionsFound: String = "",
+    val genericRecommendations: String = "",
     
     // Medications list serialized via Room TypeConverter
     val drugsJson: String,

@@ -36,6 +36,8 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Medication
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -71,6 +73,7 @@ import coil.compose.AsyncImage
 import com.example.data.model.DrugItem
 import com.example.domain.AuditRulesEngine
 import com.example.domain.ParsedPrescription
+import com.example.domain.PrescriptionOcrParser
 import com.example.ui.components.AntibioticBadge
 import com.example.ui.components.ScheduleH1Badge
 import com.example.ui.components.ScheduleHBadge
@@ -94,51 +97,33 @@ fun PrescriptionScanScreen(
     val isProcessing by viewModel.isProcessing.collectAsStateWithLifecycle()
     val pendingParsed by viewModel.pendingParsedPrescription.collectAsStateWithLifecycle()
 
-    var rxTextInput by remember {
-        mutableStateOf(
-            """
-            Dr. P. K. Verma, MD (Med)
-            Reg No: MCI-48201
-            Date: 06/09/2026
-            Pt: Mohan Lal, 54 Yrs, Male, UHID-93821
-            Dx: Essential Hypertension with Grade 1 Angina
-            Allergies: NKA (No Known Drug Allergies)
-            
-            Rx:
-            1. Tab Telmisartan 40mg - 1 Tab OD (Morning) x 30 days
-            2. Tab Amlodipine 5mg - 1 Tab OD (Night) x 30 days
-            3. Tab Atorvastatin 20mg - 1 Tab HS (Bedtime) x 30 days
-            4. Tab Sorbitrate 5mg - 1 Tab Sublingual SOS for chest pain
-            
-            Dr. Signature: [Signed]
-            """.trimIndent()
-        )
-    }
-
-    var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
+    val rxTextInput by viewModel.rxTextInput.collectAsStateWithLifecycle()
+    val selectedImageUri by viewModel.selectedImageUri.collectAsStateWithLifecycle()
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
-        selectedImageUri = uri
+        viewModel.setSelectedImageUri(uri)
         if (uri != null) {
-            // Simulated / OCR extracted content from scanned prescription
-            rxTextInput = """
-                Dr. R. K. Joshi, MS
-                Reg No: DMC-61902
-                Pt: Smt. Kamla Devi, 62Y / F
-                UHID: UHID-77210
-                Date: 06/09/2026
-                Dx: Severe Knee Osteoarthritis with acute inflammation
-                Allergy: Nil reported
-                
-                Rx:
-                1. Tab Aceclofenac + Paracetamol + Rabeprazole - 1 BD x 7 days
-                2. Tab Calcium Carbonate + Vitamin D3 500mg - 1 OD x 30 days
-                3. Inj Ceftriaxone 1g IV BD x 2 days
-                
-                Dr. Signature Verified
-            """.trimIndent()
+            viewModel.setRxTextInput("Prescription image attached for Multimodal AI OCR.")
+        }
+    }
+
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bitmap ->
+        if (bitmap != null) {
+            try {
+                val file = java.io.File(context.cacheDir, "scan_${System.currentTimeMillis()}.jpg")
+                file.outputStream().use { out ->
+                    bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 100, out)
+                }
+                viewModel.setSelectedImageUri(android.net.Uri.fromFile(file))
+                viewModel.setRxTextInput("Prescription image attached for Multimodal AI OCR.")
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
     }
 
@@ -180,7 +165,11 @@ fun PrescriptionScanScreen(
                         viewModel.commitAudit(pendingParsed!!, selectedImageUri?.toString())
                         onBack()
                     },
-                    onDiscard = { viewModel.clearPendingParsed() }
+                    onDiscard = {
+                        viewModel.clearPendingParsed()
+                        viewModel.setSelectedImageUri(null)
+                        viewModel.setRxTextInput("")
+                    }
                 )
             } else {
                 // Presets Section
@@ -197,7 +186,7 @@ fun PrescriptionScanScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     PresetChip("Hypertension OPD (Compliant)") {
-                        rxTextInput = """
+                        viewModel.setRxTextInput("""
                             Dr. P. K. Verma, MD (Med)
                             Reg No: MCI-48201
                             Date: 06/09/2026
@@ -211,11 +200,36 @@ fun PrescriptionScanScreen(
                             3. Tab Atorvastatin 20mg - 1 Tab HS x 30 days
                             
                             Dr. Signature: [Signed]
-                        """.trimIndent()
+                        """.trimIndent())
+                    }
+
+                    PresetChip("Apex Hospital (Mr. Piyush)") {
+                        viewModel.setSelectedImageUri(null)
+                        viewModel.setRxTextInput("""
+                            Apex Research Centre & Hospital Pvt. Ltd.
+                            Hospital: APEX HOSPITAL
+                            Pt: Mr. Piyush, 19 Yrs, Male, UHID-54207
+                            Date: 04/09/2026
+                            Dx: Pain in Abdomen radiate Lt Flank Region, HTN, DM II
+                            BP: 120/70, P: 89, SpO2: 96%, T: 97.1F
+                            Allergies: NKA
+                            Doctor: Dr. Sudhir Lokwani Sir (MS)
+                            Reg No: MP-29401
+                            Adv: USG Whole Abdomen
+                            
+                            Rx:
+                            1. IVF NS 1 Bottle STAT
+                            2. Inj Razo 1 Vial STAT
+                            3. Inj Ketonav 1 Amp STAT
+                            4. Tab Pantocid 40mg OD x 2 days (Before food)
+                            5. Tab Drolgan 1 Tab BD x 2 days (After food)
+                            
+                            Dr. Signature: [Signed]
+                        """.trimIndent())
                     }
 
                     PresetChip("Schedule H1 Ceftriaxone Rx") {
-                        rxTextInput = """
+                        viewModel.setRxTextInput("""
                             Dr. Vikram Rathore, MS
                             Reg No: DMC-59302
                             Date: 06/09/2026
@@ -230,11 +244,11 @@ fun PrescriptionScanScreen(
                             4. Tab Pantoprazole 40mg OD x 7 days
                             
                             Dr. Signature: [Signed]
-                        """.trimIndent()
+                        """.trimIndent())
                     }
 
                     PresetChip("Banned FDC Non-Compliant") {
-                        rxTextInput = """
+                        viewModel.setRxTextInput("""
                             Dr. R. Gupta
                             Date: 06/09/2026
                             Pt: Rajesh, 45 Yrs, Male, UHID-33910
@@ -246,11 +260,11 @@ fun PrescriptionScanScreen(
                             2. Tab Nimesulide + Paracetamol SOS x 3 days
                             
                             Dr. Signature: [Signed]
-                        """.trimIndent()
+                        """.trimIndent())
                     }
 
                     PresetChip("Polypharmacy (6 Drugs)") {
-                        rxTextInput = """
+                        viewModel.setRxTextInput("""
                             Dr. Rajesh Gupta, MD
                             Reg No: MMC-41209
                             Date: 06/09/2026
@@ -267,36 +281,108 @@ fun PrescriptionScanScreen(
                             6. Tab Furosemide 40mg OD morning x 10 days
                             
                             Dr. Signature: [Signed]
-                        """.trimIndent()
+                        """.trimIndent())
                     }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Image Upload Card
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .clickable {
-                            photoPickerLauncher.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                // Image Upload & Camera Cards
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Card(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable {
+                                photoPickerLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            }
+                            .testTag("upload_prescription_photo_button"),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(
+                                Icons.Default.AddPhotoAlternate,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Gallery",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
                             )
                         }
-                        .testTag("upload_prescription_photo_button"),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface
-                    ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-                ) {
-                    Column(
+                    }
+
+                    Card(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable {
+                                cameraLauncher.launch(null)
+                            }
+                            .testTag("take_prescription_photo_button"),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(
+                                Icons.Default.CameraAlt,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Camera",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
+                if (selectedImageUri != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                            .clip(RoundedCornerShape(12.dp)),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
                     ) {
-                        if (selectedImageUri != null) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
                             AsyncImage(
                                 model = selectedImageUri,
                                 contentDescription = "Selected Prescription",
@@ -307,32 +393,33 @@ fun PrescriptionScanScreen(
                                 contentScale = ContentScale.Crop
                             )
                             Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = "Prescription Photo Attached • Click to change",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        } else {
-                            Icon(
-                                Icons.Default.AddPhotoAlternate,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(40.dp)
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = "Upload Prescription Photo / PDF / Scan",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = "Android zero-permission photo picker for hospital prescription images",
-                                style = MaterialTheme.typography.bodySmall,
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = if (PrescriptionOcrParser.isGeminiConfigured()) Icons.Default.CheckCircle else Icons.Default.Info,
+                                    contentDescription = null,
+                                    tint = if (PrescriptionOcrParser.isGeminiConfigured()) CompliantGreen else WarningAmber,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (PrescriptionOcrParser.isGeminiConfigured()) "Gemini Vision OCR Active" else "Gemini API Key Required for Photo OCR",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (PrescriptionOcrParser.isGeminiConfigured()) CompliantGreen else WarningAmber,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            if (!PrescriptionOcrParser.isGeminiConfigured()) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "To scan directly from photos, add GEMINI_API_KEY in the AI Studio Secrets panel (Settings ⚙️ → Secrets). You can also tap a preset or type prescription text below to audit immediately offline.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                )
+                            }
                         }
                     }
                 }
@@ -348,7 +435,7 @@ fun PrescriptionScanScreen(
                 Spacer(modifier = Modifier.height(4.dp))
                 OutlinedTextField(
                     value = rxTextInput,
-                    onValueChange = { rxTextInput = it },
+                    onValueChange = { viewModel.setRxTextInput(it) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(220.dp)
@@ -613,11 +700,19 @@ fun AuditResultReviewSection(
                             )
                         }
 
-                        Text(
+                                                Text(
                             text = "Dosage: ${drug.dose} • ${drug.route} • ${drug.frequency} for ${drug.durationDays} days",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
                         )
+                        if (drug.instructions.isNotBlank()) {
+                            Text(
+                                text = "Usage Instructions: ${drug.instructions}",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f)
+                            )
+                        }
 
                         // Tags
                         FlowRow(

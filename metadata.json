@@ -1,6 +1,6 @@
 {
-  "name": "Rx Audit",
-  "description": "One-tap WHO & NABH prescription audit tool for Indian hospitals, medical colleges, and pharmacies with tamper-evident audit trail.",
+  "name": "A1ONA",
+  "description": "A1ONA clinical prescription audit and AI drug interaction checking platform.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

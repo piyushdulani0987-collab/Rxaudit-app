@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Rx Audit"
+rootProject.name = "A1ONA"
 
 include(":app")

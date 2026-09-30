@@ -143,7 +143,7 @@ object AuditRulesEngine {
     }
 
     private fun hasBrandIndicators(name: String): Boolean {
-        val brands = listOf("dolo", "calpol", "augmentin", "pan-", "pantocid", "monocef", "zifi", "azithral", "telma", "glycomet", "amlovas", "atorva", "cpm", "crocin")
+        val brands = listOf("dolo", "calpol", "augmentin", "pan-", "pantocid", "monocef", "zifi", "azithral", "telma", "glycomet", "amlovas", "atorva", "cpm", "crocin", "razo", "ketonav", "drolgan")
         return brands.any { name.contains(it) }
     }
 
@@ -151,7 +151,8 @@ object AuditRulesEngine {
         val generics = listOf(
             "paracetamol", "amoxicillin", "metformin", "amlodipine", "telmisartan",
             "atorvastatin", "ceftriaxone", "pantoprazole", "salbutamol", "metronidazole",
-            "doxycycline", "ciprofloxacin", "azithromycin", "cetirizine", "ibuprofen", "zinc"
+            "doxycycline", "ciprofloxacin", "azithromycin", "cetirizine", "ibuprofen", "zinc",
+            "rabeprazole", "ketorolac", "drotaverine", "saline"
         )
         return generics.any { name.contains(it) } && !hasBrandIndicators(name)
     }
@@ -161,6 +162,10 @@ object AuditRulesEngine {
         if (lower.contains("dolo") || lower.contains("calpol") || lower.contains("crocin")) return "Paracetamol"
         if (lower.contains("augmentin")) return "Amoxicillin + Clavulanic Acid"
         if (lower.contains("pan") || lower.contains("pantocid")) return "Pantoprazole"
+        if (lower.contains("razo")) return "Rabeprazole"
+        if (lower.contains("ketonav")) return "Ketorolac"
+        if (lower.contains("drolgan")) return "Drotaverine + Aceclofenac"
+        if (lower.contains("ns")) return "Normal Saline (0.9% NaCl)"
         if (lower.contains("monocef")) return "Ceftriaxone"
         if (lower.contains("zifi")) return "Cefixime"
         if (lower.contains("azithral")) return "Azithromycin"
@@ -180,6 +185,7 @@ object AuditRulesEngine {
         department: String,
         dateString: String,
         diagnosis: String,
+        icd10Code: String = "",
         allergyStatusDocumented: Boolean,
         allergyDetails: String,
         historyDocumented: Boolean,
@@ -192,7 +198,9 @@ object AuditRulesEngine {
         auditorRole: String,
         prevHash: String,
         imageUri: String? = null,
-        rawOcrText: String? = null
+        rawOcrText: String? = null,
+        drugInteractionsFound: String = "",
+        genericRecommendations: String = ""
     ): PrescriptionEntity {
         val deficiencies = mutableListOf<String>()
 
@@ -273,6 +281,7 @@ object AuditRulesEngine {
             department = department,
             dateString = dateString,
             diagnosis = diagnosis,
+            icd10Code = icd10Code,
             hasDiagnosis = diagnosis.isNotBlank(),
             allergyStatusDocumented = allergyStatusDocumented,
             allergyDetails = allergyDetails.ifBlank { if (allergyStatusDocumented) "NKA (No Known Allergies)" else "Not Documented" },
@@ -281,6 +290,8 @@ object AuditRulesEngine {
             doctorName = doctorName,
             doctorRegNumber = doctorRegNumber,
             hasDoctorSignature = hasDoctorSignature,
+            drugInteractionsFound = drugInteractionsFound,
+            genericRecommendations = genericRecommendations,
             drugsJson = drugsJson,
             totalDrugsCount = totalDrugs,
             genericCount = genericCount,

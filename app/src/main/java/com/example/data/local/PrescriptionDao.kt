@@ -34,6 +34,9 @@ interface PrescriptionDao {
     @Query("SELECT * FROM prescriptions WHERE scheduleH1Count > 0 ORDER BY auditTimestamp DESC")
     fun getScheduleH1Prescriptions(): Flow<List<PrescriptionEntity>>
 
+    @Query("SELECT * FROM prescriptions WHERE patientName LIKE '%' || :searchQuery || '%' OR doctorName LIKE '%' || :searchQuery || '%' OR drugsJson LIKE '%' || :searchQuery || '%' ORDER BY auditTimestamp DESC")
+    fun searchPrescriptions(searchQuery: String): Flow<List<PrescriptionEntity>>
+
     @Query("SELECT * FROM prescriptions ORDER BY id DESC LIMIT 1")
     suspend fun getLatestPrescription(): PrescriptionEntity?
 
